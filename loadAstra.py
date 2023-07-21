@@ -17,15 +17,6 @@ load_dotenv(find_dotenv(), override=True)
 embed_file = f"{example_asin}.reviews-embeddings-{embed_model}.parquet.gz"
 df = pd.read_parquet(embed_file)
 
-# Overall is a float64 in the parquet file, but it is only values 1-5
-df['overall'] = df['overall'].astype('int8')
-
-# reviewTime is in a non-obvious string format
-df['reviewTime'] = pd.to_datetime(df['reviewTime'], format='%m %d, %Y')
-
-# Convert unixReviewTime to milliseconds
-df['unixReviewTime'] = df['unixReviewTime'] * 1000
-
 # Astra connection
 cloud_config = {'secure_connect_bundle': os.environ['ASTRA_SECUREBUNDLE_PATH']}
 auth_provider = PlainTextAuthProvider(os.environ['ASTRA_CLIENT_ID'], os.environ['ASTRA_CLIENT_SECRET'])
