@@ -20,19 +20,23 @@ from langchain.agents.agent_toolkits import ZapierToolkit
 from langchain.utilities.zapier import ZapierNLAWrapper
 from langchain.agents import initialize_agent
 
+import pandas as pd
+import vectorstore
+from CONSTANTS import *
+
 # Load the .env file
 if not load_dotenv(find_dotenv(),override=True):
     raise Exception("Couldn't load .env file")
 
 enableShowAd = False
-productName = "Streamlight 66118 Stylus Pro LED PenLight with Holster, Black - 100 Lumens"
 ##################################
 
 @st.cache_resource()
 def init_connections():
-    chat = ChatOpenAI(model_name="gpt-3.5-turbo",temperature=0.2)
+    df_meta = pd.read_parquet('metadata.parquet.gz')
+    productName=df_meta.loc[df_meta['asin'] == example_asin]['title'].values[0]
 
-    embed_model = "text-embedding-ada-002"
+    chat = ChatOpenAI(model_name=chat_model_name,temperature=0.2)
     embedding_function = OpenAIEmbeddings(model=embed_model)
 
     cloud_config = {'secure_connect_bundle': os.environ['ASTRA_SECUREBUNDLE_PATH']}
@@ -40,12 +44,7 @@ def init_connections():
     cluster = Cluster(cloud=cloud_config, auth_provider=auth_provider)
     session = cluster.connect()
 
-    vstore = Cassandra(
-        embedding=embedding_function,
-        session=session,
-        keyspace=os.environ['ASTRA_KEYSPACE'],
-        table_name=os.environ['ASTRA_TABLE']
-        )
+    vstore = vectorstore.Cassandra(embedding_function, session, keyspace_name, table_name)
 
     zapier = ZapierNLAWrapper()
     toolkit = ZapierToolkit.from_zapier_nla_wrapper(zapier)
@@ -55,12 +54,12 @@ def init_connections():
     agent = initialize_agent(toolkit.get_tools(), llm, 
         agent="zero-shot-react-description", verbose=True)
 
-    return chat, vstore, agent
+    return chat, vstore, agent, productName
 
 @st.cache_data()
 def fetch_and_summarize_reviews(review_text_search):
     st.write("Searching for reviews...")
-    docs=vstore.similarity_search(review_text_search, k=100)
+    docs=vstore.similarity_search(review_text_search, k=100, asin=example_asin, overall_rating=5)
 
     # Write summary of reviews
     prompt_template_summary = """
@@ -80,13 +79,14 @@ def fetch_and_summarize_reviews(review_text_search):
 @st.cache_data()
 def generateAd(text: str):
     prompt_template_fb = """
-    Write the copy for a facebook ad based on the reviews:
+    Write the copy for a single Facebook ad based on the reviews:
 
     {text}
 
     As far as text goes, you can have up to 40 characters in your headline, 
     125 characters in your primary text, and 30 characters in your description. 
-    Include emoji. The description should have a quote from a reviewer.
+    The primary text should be a bullet-point style, and include emoji.
+    It description should have a quote from a reviewer.
     """
     st.write("Generating ad copy...")
     PROMPT = PromptTemplate(template=prompt_template_fb, input_variables=["text"])
@@ -95,7 +95,7 @@ def generateAd(text: str):
     return fb_copy
 
 @st.cache_data()
-def generatePopup(text: str):
+def generatePopup():
     prompt_template_fb = """
     Write the for a web-popup based on the reviews:
 
@@ -117,23 +117,25 @@ def sendEmail(toFirstName: str, eMail: str, review: str, reviewerName: str, summ
     st.write(f"Sending e-mail to {toFirstName} at {eMail}...")
     emailPrompt=f"""
     The customer {reviewerName} just gave the following review of a product named '{productName}':
-    
-    {review}
-    
-    Formulate and send an email to {eMail}, addressed to {toFirstName}, based on the review 
-    that {reviewerName} gave. It should quote the review. It should be formatted for readability, 
-    with the addressee on the first line, and the body of the email on subsequent lines. 
-    Take into account the overall summary of the review given here: 
-    
-    {summary}
 
-    The email should be signed in a friendly manner with the name {fromFirstName}.
+    '{review}'
+
+    Send a HTML-formatted email to {toFirstName} with email address {eMail}, 
+    based on the review that {reviewerName} gave, and take into account the overall 
+    summary of the review given here:
+
+    '{summary}'
+
+    The object of the e-mail is to encourage them to buy the product. Be sure to mention
+    the customer review.
+
+    The email should be signed with {fromFirstName}.
     """
 
     llmAgent.run(emailPrompt)
 
 st.title('🦜🔗 LLM Marketing Assistant')
-chat, vstore, llmAgent = init_connections()
+chat, vstore, llmAgent, productName = init_connections()
 
 st.write("## Product:")
 st.write(f"### {productName}")
@@ -163,7 +165,7 @@ if (enableShowAd):
 if (enableShowAd):
     st.write("### Popup:")
     if st.button("Generate Popup"):
-        adCopy = generatePopup(review_text_search)
+        adCopy = generatePopup()
         print(adCopy)
         st.write(adCopy)
 
@@ -177,5 +179,5 @@ if (enableShowAd):
         submitted = st.form_submit_button("Send E-mail")
    
         if submitted:
-            sendEmail(toFirstName=toFirstName, eMail=eMail, review=docs[0].page_content, reviewerName=docs[0].metadata['reviewerName'], summary=summary, fromFirstName=fromFirstName)
+            sendEmail(toFirstName=toFirstName, eMail=eMail, review=docs[0].page_content, reviewerName=docs[0].metadata['reviewer_name'], summary=summary, fromFirstName=fromFirstName)
             st.write("E-mail sent!")

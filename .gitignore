@@ -2,7 +2,5 @@
 .env
 *.zip
 *.gz
-wine_data.db
-wines-embeddings.parquet
-wines.parquet
 *.code-workspace
+__pycache__
